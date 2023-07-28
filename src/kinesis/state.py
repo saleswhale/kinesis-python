@@ -28,7 +28,7 @@ class DynamoDB(object):
         self.shards = {}
 
     def get_iterator_args(self, shard_id):
-        iterator_args = {'shard_iterator_type': 'LATEST'}
+        iterator_args = {'ShardIteratorType': 'LATEST'}
 
         if shard_id not in self.shards:
             return iterator_args
@@ -53,8 +53,8 @@ class DynamoDB(object):
             })
         else:
             iterator_args = {
-                'shard_iterator_type': 'AFTER_SEQUENCE_NUMBER',
-                'starting_sequence_number': last_sequence_number
+                'ShardIteratorType': 'AFTER_SEQUENCE_NUMBER',
+                'StartingSequenceNumber': last_sequence_number
             }
 
         return iterator_args
@@ -73,12 +73,8 @@ class DynamoDB(object):
                         shards.#shard_id.heartbeat = :heartbeat
                 """,
                 ConditionExpression="""
-                    consumerGroup = :consumer_group AND
-                    streamName = :stream_name AND
-                    (
-                        attribute_not_exists(shards.#shard_id.checkpoint)
-                        OR shards.#shard_id.checkpoint < :seq
-                    )
+                    attribute_not_exists(shards.#shard_id.checkpoint) OR
+                    shards.#shard_id.checkpoint < :seq
                 """,
                 ExpressionAttributeValues={
                     ":heartbeat": heartbeat,
@@ -127,13 +123,21 @@ class DynamoDB(object):
             # ensure that someone else hasn't grabbed a lock first.
             self.dynamo_table.update_item(
                 Key=self.key,
-                UpdateExpression="set fqdn = :new_fqdn, expires = :new_expires",
-                ConditionExpression="fqdn = :current_fqdn AND expires = :current_expires",
+                UpdateExpression="""
+                    SET
+                        shards.#shard_id.fqdn = :new_fqdn,
+                        shards.#shard_id.expires = :new_expires
+                """,
+                ConditionExpression="""
+                    shards.#shard_id.fqdn = :current_fqdn AND
+                    shards.#shard_id.expires = :current_expires
+                """,
                 ExpressionAttributeValues={
                     ':new_fqdn': fqdn,
                     ':new_expires': expires,
                     ':current_fqdn': self.shards[shard_id]['fqdn'],
                     ':current_expires': self.shards[shard_id]['expires'],
+                    ':shard_id': shard_id
                 }
             )
         except KeyError:
@@ -142,8 +146,12 @@ class DynamoDB(object):
             # lock at the same time.
             resp = self.dynamo_table.update_item(
                 Key=self.key,
-                UpdateExpression="set fqdn = :new_fqdn, expires = :new_expires",
-                ConditionExpression="attribute_not_exists(#shard_id)",
+                UpdateExpression="""
+                    SET
+                        shards.#shard_id.fqdn = :new_fqdn,
+                        shards.#shard_id.expires = :new_expires
+                """,
+                ConditionExpression="attribute_not_exists(shards.#shard_id)",
                 ExpressionAttributeValues={
                     ':new_fqdn': fqdn,
                     ':new_expires': expires,
