@@ -33,8 +33,8 @@ class DynamoDB(object):
         if shard_id not in self.shards:
             return iterator_args
 
-        heartbeat = self.shards[shard_id]['heartbeat']
-        last_sequence_number = self.shards[shard_id]['checkpoint']
+        heartbeat = self.shards[shard_id].get('heartbeat')
+        last_sequence_number = self.shards[shard_id].get('checkpoint')
 
         if not heartbeat or not last_sequence_number:
             return iterator_args
