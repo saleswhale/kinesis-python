@@ -140,6 +140,10 @@ class DynamoDB(object):
                     ':shard_id': shard_id
                 }
             )
+            self.shards[shard_id].update({
+                'fqdn': fqdn,
+                'expires': expires
+            })
         except KeyError:
             # No previous lock - this occurs because we try to reference the shard info in the attr values but we don't
             # have one.  Here our condition prevents a race condition with two readers starting up and both adding a
@@ -152,15 +156,16 @@ class DynamoDB(object):
                     ':empty': {}
                 },
             )
+            shard = {
+                'fqdn': fqdn,
+                'expires': expires
+            }
             self.dynamo_table.update_item(
                 Key=self.key,
                 UpdateExpression="SET shards.#shard_id = :shard",
                 ConditionExpression="attribute_not_exists(shards.#shard_id)",
                 ExpressionAttributeValues={
-                    ':shard': {
-                        'fqdn': fqdn,
-                        'expires': expires
-                    }
+                    ':shard': shard
                 },
                 ExpressionAttributeNames={
                     # 'shard' is a reserved word in expressions so we need to use a bound name to work around it
@@ -168,6 +173,7 @@ class DynamoDB(object):
                 },
                 ReturnValues='ALL_NEW'
             )
+            self.shards[shard_id] = shard
         except ClientError as exc:
             if exc.response['Error']['Code'] == "ConditionalCheckFailedException":
                 # someone else grabbed the lock first
