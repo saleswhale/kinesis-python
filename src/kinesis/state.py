@@ -144,21 +144,27 @@ class DynamoDB(object):
             # No previous lock - this occurs because we try to reference the shard info in the attr values but we don't
             # have one.  Here our condition prevents a race condition with two readers starting up and both adding a
             # lock at the same time.
-            resp = self.dynamo_table.update_item(
+            self.dynamo_table.update_item(
                 Key=self.key,
-                UpdateExpression="""
-                    SET
-                        shards.#shard_id.fqdn = :new_fqdn,
-                        shards.#shard_id.expires = :new_expires
-                """,
+                UpdateExpression="SET shards = :empty",
+                ConditionExpression="attribute_not_exists(shards)",
+                ExpressionAttributeValues={
+                    ':empty': {}
+                },
+            )
+            self.dynamo_table.update_item(
+                Key=self.key,
+                UpdateExpression="SET shards.#shard_id = :shard",
                 ConditionExpression="attribute_not_exists(shards.#shard_id)",
                 ExpressionAttributeValues={
-                    ':new_fqdn': fqdn,
-                    ':new_expires': expires,
+                    ':shard': {
+                        'fqdn': fqdn,
+                        'expires': expires
+                    }
                 },
                 ExpressionAttributeNames={
                     # 'shard' is a reserved word in expressions so we need to use a bound name to work around it
-                    '#shard_id': 'shard',
+                    '#shard_id': shard_id,
                 },
                 ReturnValues='ALL_NEW'
             )
