@@ -1,4 +1,5 @@
 from __future__ import absolute_import
+from datetime import datetime, timedelta
 
 import logging
 import socket
@@ -11,40 +12,78 @@ from .exceptions import RETRY_EXCEPTIONS
 
 log = logging.getLogger(__name__)
 
+STREAM_RETENTION_PERIOD_IN_HOURS = 24
 
 class DynamoDB(object):
-    def __init__(self, table_name, boto3_session=None, endpoint_url=None):
+    def __init__(self, table_name, consumer_name, stream_name, boto3_session=None, endpoint_url=None):
         self.boto3_session = boto3_session or boto3.Session()
 
         self.dynamo_resource = self.boto3_session.resource('dynamodb', endpoint_url=endpoint_url)
         self.dynamo_table = self.dynamo_resource.Table(table_name)
+        self.key = {
+            "consumerGroup": consumer_name,
+            "streamName": stream_name
+        }
 
         self.shards = {}
 
     def get_iterator_args(self, shard_id):
+        iterator_args = {'shard_iterator_type': 'LATEST'}
+
+        if shard_id not in self.shards:
+            return iterator_args
+
+        heartbeat = self.shards[shard_id]['heartbeat']
+        last_sequence_number = self.shards[shard_id]['checkpoint']
+
+        if not heartbeat or not last_sequence_number:
+            return iterator_args
+
         try:
-            return dict(
-                ShardIteratorType='AFTER_SEQUENCE_NUMBER',
-                StartingSequenceNumber=self.shards[shard_id]['seq']
-            )
-        except KeyError:
-            return dict(
-                ShardIteratorType='LATEST'
-            )
+            heartbeat_time = datetime.strptime(heartbeat, '%Y-%m-%dT%H:%M:%S.%fZ')
+            heartbeat_diff = datetime.utcnow() - heartbeat_time
+        except ValueError:
+            heartbeat_diff = timedelta.max
+
+        if heartbeat_diff > timedelta(hours=1 * STREAM_RETENTION_PERIOD_IN_HOURS):
+            log.info({
+                'message': 'Heartbeat is stale, defaulting to LATEST',
+                'sequence_number': last_sequence_number,
+                'heartbeat': heartbeat
+            })
+        else:
+            iterator_args = {
+                'shard_iterator_type': 'AFTER_SEQUENCE_NUMBER',
+                'starting_sequence_number': last_sequence_number
+            }
+
+        return iterator_args
 
     def checkpoint(self, shard_id, seq):
-        fqdn = socket.getfqdn()
+        heartbeat = datetime.utcnow().isoformat() + 'Z'
 
         try:
             # update the seq attr in our item
             # ensure our fqdn still holds the lock and the new seq is bigger than what's already there
             self.dynamo_table.update_item(
-                Key={'shard': shard_id},
-                UpdateExpression="set seq = :seq",
-                ConditionExpression="fqdn = :fqdn AND (attribute_not_exists(seq) OR seq < :seq)",
+                Key=self.key,
+                UpdateExpression="""
+                    SET
+                        shards.#shard_id.checkpoint = :seq,
+                        shards.#shard_id.heartbeat = :heartbeat
+                """,
+                ConditionExpression="""
+                    consumerGroup = :consumer_group AND
+                    streamName = :stream_name AND
+                    (
+                        attribute_not_exists(shards.#shard_id.checkpoint)
+                        OR shards.#shard_id.checkpoint < :seq
+                    )
+                """,
                 ExpressionAttributeValues={
-                    ':fqdn': fqdn,
-                    ':seq': seq,
+                    ":heartbeat": heartbeat,
+                    ":shard_id": shard_id,
+                    ":seq": seq,
                 }
             )
         except ClientError as exc:
@@ -56,14 +95,13 @@ class DynamoDB(object):
             raise
 
     def lock_shard(self, shard_id, expires):
-        dynamo_key = {'shard': shard_id}
         fqdn = socket.getfqdn()
         now = time.time()
         expires = int(now + expires)  # dynamo doesn't support floats
 
         try:
             # Do a consistent read to get the current document for our shard id
-            resp = self.dynamo_table.get_item(Key=dynamo_key, ConsistentRead=True)
+            resp = self.dynamo_table.get_item(Key=self.key, ConsistentRead=True)
             self.shards[shard_id] = resp['Item']
         except KeyError:
             # if there's no Item in the resp then the document didn't exist
@@ -88,7 +126,7 @@ class DynamoDB(object):
             # We add a condition that ensures the fqdn & expires from the document we loaded hasn't changed to
             # ensure that someone else hasn't grabbed a lock first.
             self.dynamo_table.update_item(
-                Key=dynamo_key,
+                Key=self.key,
                 UpdateExpression="set fqdn = :new_fqdn, expires = :new_expires",
                 ConditionExpression="fqdn = :current_fqdn AND expires = :current_expires",
                 ExpressionAttributeValues={
@@ -103,7 +141,7 @@ class DynamoDB(object):
             # have one.  Here our condition prevents a race condition with two readers starting up and both adding a
             # lock at the same time.
             resp = self.dynamo_table.update_item(
-                Key=dynamo_key,
+                Key=self.key,
                 UpdateExpression="set fqdn = :new_fqdn, expires = :new_expires",
                 ConditionExpression="attribute_not_exists(#shard_id)",
                 ExpressionAttributeValues={
