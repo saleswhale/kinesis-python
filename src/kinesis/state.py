@@ -113,7 +113,7 @@ class DynamoDB(object):
             # all other client errors just get re-raised
             raise
         else:
-            if fqdn != self.shards[shard_id]['fqdn'] and now < self.shards[shard_id]['expires']:
+            if shard_id in self.shards and fqdn != self.shards[shard_id]['fqdn'] and now < self.shards[shard_id]['expires']:
                 # we don't hold the lock and it hasn't expired
                 log.debug("Not starting reader for shard %s -- locked by %s until %s",
                           shard_id, self.shards[shard_id]['fqdn'], self.shards[shard_id]['expires'])
