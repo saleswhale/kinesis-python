@@ -98,7 +98,7 @@ class DynamoDB(object):
         try:
             # Do a consistent read to get the current document for our shard id
             resp = self.dynamo_table.get_item(Key=self.key, ConsistentRead=True)
-            self.shards[shard_id] = resp['Item']
+            self.shards = resp['Item']['shards']
         except KeyError:
             # if there's no Item in the resp then the document didn't exist
             pass
