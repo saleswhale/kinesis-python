@@ -154,8 +154,7 @@ class DynamoDB(object):
             # lock at the same time.
             self.dynamo_table.update_item(
                 Key=self.key,
-                UpdateExpression="SET shards = :empty",
-                ConditionExpression="attribute_not_exists(shards)",
+                UpdateExpression="SET shards = if_not_exists(shards, :empty)",
                 ExpressionAttributeValues={
                     ':empty': {}
                 },
