@@ -76,9 +76,11 @@ class DynamoDB(object):
                     attribute_not_exists(shards.#shard_id.checkpoint) OR
                     shards.#shard_id.checkpoint < :seq
                 """,
+                ExpressionAttributeNames={
+                    "#shard_id": shard_id
+                },
                 ExpressionAttributeValues={
                     ":heartbeat": heartbeat,
-                    ":shard_id": shard_id,
                     ":seq": seq,
                 }
             )
@@ -132,12 +134,14 @@ class DynamoDB(object):
                     shards.#shard_id.fqdn = :current_fqdn AND
                     shards.#shard_id.expires = :current_expires
                 """,
+                ExpressionAttributeNames={
+                    "#shard_id": shard_id
+                },
                 ExpressionAttributeValues={
                     ':new_fqdn': fqdn,
                     ':new_expires': expires,
                     ':current_fqdn': self.shards[shard_id]['fqdn'],
                     ':current_expires': self.shards[shard_id]['expires'],
-                    ':shard_id': shard_id
                 }
             )
             self.shards[shard_id].update({
