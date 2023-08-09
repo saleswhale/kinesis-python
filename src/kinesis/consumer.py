@@ -131,7 +131,7 @@ class KinesisConsumer(object):
             # we should try to start a shard reader if the shard id specified isn't in our shards
             if shard_data['ShardId'] not in self.shards:
                 if 'EndingSequenceNumber' in shard_data['SequenceNumberRange']:
-                    log.info("Shard %s closed, skipping shard reader creation...", shard_data['ShardId'])
+                    log.debug("Shard %s closed, skipping shard reader creation...", shard_data['ShardId'])
                     continue
 
                 log.info("Shard reader for %s does not exist, creating...", shard_data['ShardId'])
