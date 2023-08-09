@@ -1,6 +1,6 @@
 from __future__ import absolute_import
 
-import collections
+import collections.abc
 import logging
 import multiprocessing
 import sys
@@ -30,12 +30,12 @@ def sizeof(obj, seen=None):
     # since strings are iterabes we return their size explicitly first
     if isinstance(obj, six.string_types):
         return size
-    elif isinstance(obj, collections.Mapping):
+    elif isinstance(obj, collections.abc.Mapping):
         return size + sum(
             sizeof(key, seen) + sizeof(val, seen)
             for key, val in six.iteritems(obj)
         )
-    elif isinstance(obj, collections.Iterable):
+    elif isinstance(obj, collections.abc.Iterable):
         return size + sum(
             sizeof(item, seen)
             for item in obj
