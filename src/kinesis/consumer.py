@@ -98,9 +98,6 @@ class KinesisConsumer(object):
         self.stream_data = None
         self.run = True
 
-    def state_shard_id(self, shard_id):
-        return '_'.join([self.stream_name, shard_id])
-
     def shutdown_shard_reader(self, shard_id):
         try:
             self.shards[shard_id].shutdown()
@@ -117,7 +114,7 @@ class KinesisConsumer(object):
         for shard_data in self.stream_data['StreamDescription']['Shards']:
             # see if we can get a lock on this shard id
             try:
-                shard_locked = self.state.lock_shard(self.state_shard_id(shard_data['ShardId']), self.LOCK_DURATION)
+                shard_locked = self.state.lock_shard(shard_data['ShardId'], self.LOCK_DURATION)
             except AttributeError:
                 # no self.state
                 pass
@@ -133,9 +130,13 @@ class KinesisConsumer(object):
 
             # we should try to start a shard reader if the shard id specified isn't in our shards
             if shard_data['ShardId'] not in self.shards:
+                if 'EndingSequenceNumber' in shard_data['SequenceNumberRange']:
+                    log.debug("Shard %s closed, skipping shard reader creation...", shard_data['ShardId'])
+                    continue
+
                 log.info("Shard reader for %s does not exist, creating...", shard_data['ShardId'])
                 try:
-                    iterator_args = self.state.get_iterator_args(self.state_shard_id(shard_data['ShardId']))
+                    iterator_args = self.state.get_iterator_args(shard_data['ShardId'])
                 except AttributeError:
                     # no self.state
                     iterator_args = dict(ShardIteratorType='LATEST')
@@ -196,7 +197,6 @@ class KinesisConsumer(object):
                     except six.moves.queue.Empty:
                         pass
                     else:
-                        state_shard_id = self.state_shard_id(shard_id)
                         for item in resp['Records']:
                             if not self.run:
                                 break
@@ -205,7 +205,7 @@ class KinesisConsumer(object):
                             yield item
 
                             try:
-                                self.state.checkpoint(state_shard_id, item['SequenceNumber'])
+                                self.state.checkpoint(shard_id, item['SequenceNumber'])
                             except AttributeError:
                                 # no self.state
                                 pass
