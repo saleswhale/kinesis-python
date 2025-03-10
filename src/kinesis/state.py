@@ -23,10 +23,8 @@ class DynamoDB(object):
         stream_name,
         boto3_session=None,
         endpoint_url=None,
-        use_enhanced_fan_out=False,
     ):
         self.boto3_session = boto3_session or boto3.Session()
-        self.use_enhanced_fan_out = use_enhanced_fan_out
 
         self.dynamo_resource = self.boto3_session.resource(
             "dynamodb", endpoint_url=endpoint_url
@@ -43,12 +41,8 @@ class DynamoDB(object):
         For EFO, this will be used to determine the starting position in SubscribeToShard.
         For standard consumers, this determines the ShardIterator.
         """
-        if self.use_enhanced_fan_out:
-            # Default for EFO
-            iterator_args = {"Type": "LATEST"}
-        else:
-            # Default for standard consumer
-            iterator_args = {"ShardIteratorType": "LATEST"}
+        # Default iterator args (same format regardless of consumption mode)
+        iterator_args = {"ShardIteratorType": "LATEST"}
 
         if shard_id not in self.shards:
             return iterator_args
@@ -74,17 +68,10 @@ class DynamoDB(object):
                 }
             )
         else:
-            if self.use_enhanced_fan_out:
-                # For EFO, use the appropriate format
-                iterator_args = {
-                    "Type": "AFTER_SEQUENCE_NUMBER",
-                    "SequenceNumber": last_sequence_number,
-                }
-            else:
-                iterator_args = {
-                    "ShardIteratorType": "AFTER_SEQUENCE_NUMBER",
-                    "StartingSequenceNumber": last_sequence_number,
-                }
+            iterator_args = {
+                "ShardIteratorType": "AFTER_SEQUENCE_NUMBER",
+                "StartingSequenceNumber": last_sequence_number,
+            }
 
         return iterator_args
 

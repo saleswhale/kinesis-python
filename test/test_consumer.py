@@ -4,15 +4,13 @@ except ImportError:
     from mock import MagicMock
 
 import unittest
+
 import mock
 from botocore.exceptions import ClientError
 from offspring.process import SubprocessLoop
 
-from kinesis.consumer import (
-    KinesisConsumer,
-    EnhancedShardReader,
-    EnhancedFanOut,
-)
+from kinesis.consumer import (EnhancedFanOut, EnhancedShardReader,
+                              KinesisConsumer)
 
 
 def test_setup_shards(mocker):
