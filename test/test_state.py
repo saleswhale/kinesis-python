@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta
 
-from kinesis.consumer import DynamoDB
+from kinesis.state import DynamoDB
 
 STREAM_RETENTION_PERIOD_IN_HOURS = 24
 
@@ -26,7 +26,11 @@ class TestDynamoDB(unittest.TestCase):
 
         args = dynamo.get_iterator_args("shard-0001")
         self.assertEqual(
-            args, {"Type": "AFTER_SEQUENCE_NUMBER", "SequenceNumber": "seq-1234"}
+            args,
+            {
+                "ShardIteratorType": "AFTER_SEQUENCE_NUMBER",
+                "StartingSequenceNumber": "seq-1234",
+            },
         )
 
     def test_get_iterator_args_stale_heartbeat_efo(self):
@@ -42,4 +46,4 @@ class TestDynamoDB(unittest.TestCase):
         }
 
         args = dynamo.get_iterator_args("shard-0001")
-        self.assertEqual(args, {"Type": "LATEST"})
+        self.assertEqual(args, {"ShardIteratorType": "LATEST"})

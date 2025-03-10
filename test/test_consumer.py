@@ -9,8 +9,9 @@ import mock
 from botocore.exceptions import ClientError
 from offspring.process import SubprocessLoop
 
-from kinesis.consumer import (EnhancedFanOut, EnhancedShardReader,
-                              KinesisConsumer)
+from kinesis.consumer import KinesisConsumer
+from kinesis.enhanced_fan_out import EnhancedFanOut
+from kinesis.enhanced_shard_reader import EnhancedShardReader
 
 
 def test_setup_shards(mocker):
