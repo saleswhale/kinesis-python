@@ -32,20 +32,17 @@ def sizeof(obj, seen=None):
         return size
     elif isinstance(obj, collections.abc.Mapping):
         return size + sum(
-            sizeof(key, seen) + sizeof(val, seen)
-            for key, val in six.iteritems(obj)
+            sizeof(key, seen) + sizeof(val, seen) for key, val in six.iteritems(obj)
         )
     elif isinstance(obj, collections.abc.Iterable):
-        return size + sum(
-            sizeof(item, seen)
-            for item in obj
-        )
+        return size + sum(sizeof(item, seen) for item in obj)
 
     return size
 
 
 class AsyncProducer(SubprocessLoop):
     """Async accumulator and producer based on a multiprocessing Queue"""
+
     # Tell our subprocess loop that we don't want to terminate on shutdown since we want to drain our queue first
     TERMINATE_ON_SHUTDOWN = False
 
@@ -56,10 +53,19 @@ class AsyncProducer(SubprocessLoop):
     # * Each shard can support up to 1,000 records per second for writes, up to a maximum total data write rate of 1 MB
     #   per second (including partition keys).
     # * PutRecords supports up to 500 records in a single call
-    MAX_SIZE = (2 ** 20)
+    MAX_SIZE = 2**20
     MAX_COUNT = 500
 
-    def __init__(self, stream_name, buffer_time, queue, max_count=None, max_size=None, boto3_session=None, endpoint_url=None):
+    def __init__(
+        self,
+        stream_name,
+        buffer_time,
+        queue,
+        max_count=None,
+        max_size=None,
+        boto3_session=None,
+        endpoint_url=None,
+    ):
         self.stream_name = stream_name
         self.buffer_time = buffer_time
         self.queue = queue
@@ -72,7 +78,7 @@ class AsyncProducer(SubprocessLoop):
         if boto3_session is None:
             boto3_session = boto3.Session()
         self.endpoint_url = endpoint_url
-        self.client = boto3_session.client('kinesis', endpoint_url=endpoint_url)
+        self.client = boto3_session.client("kinesis", endpoint_url=endpoint_url)
 
         self.start()
 
@@ -87,20 +93,27 @@ class AsyncProducer(SubprocessLoop):
             queue_timeout = self.buffer_time - (time.time() - timer_start)
             try:
                 log.debug("Fetching from queue with timeout: %s", queue_timeout)
-                data, explicit_hash_key, partition_key = self.queue.get(block=True, timeout=queue_timeout)
+                data, explicit_hash_key, partition_key = self.queue.get(
+                    block=True, timeout=queue_timeout
+                )
             except six.moves.queue.Empty:
                 continue
 
             record = {
-                'Data': data,
-                'PartitionKey': partition_key or '{0}{1}'.format(time.clock(), time.time()),
+                "Data": data,
+                "PartitionKey": partition_key
+                or "{0}{1}".format(time.clock(), time.time()),
             }
             if explicit_hash_key is not None:
-                record['ExplicitHashKey'] = explicit_hash_key
+                record["ExplicitHashKey"] = explicit_hash_key
 
             records_size += sizeof(record)
             if records_size >= self.max_size:
-                log.debug("Records exceed MAX_SIZE (%s)!  Adding to next_records: %s", self.max_size, record)
+                log.debug(
+                    "Records exceed MAX_SIZE (%s)!  Adding to next_records: %s",
+                    self.max_size,
+                    record,
+                )
                 self.next_records = [record]
                 break
 
@@ -109,7 +122,10 @@ class AsyncProducer(SubprocessLoop):
 
             records_count += 1
             if records_count == self.max_count:
-                log.debug("Records have reached MAX_COUNT (%s)!  Flushing records.", self.max_count)
+                log.debug(
+                    "Records have reached MAX_COUNT (%s)!  Flushing records.",
+                    self.max_count,
+                )
                 break
 
         self.flush_records()
@@ -124,10 +140,7 @@ class AsyncProducer(SubprocessLoop):
     def flush_records(self):
         if self.records:
             log.debug("Flushing %d records", len(self.records))
-            self.client.put_records(
-                StreamName=self.stream_name,
-                Records=self.records
-            )
+            self.client.put_records(StreamName=self.stream_name, Records=self.records)
 
         self.records = self.next_records
         self.next_records = []
@@ -136,10 +149,25 @@ class AsyncProducer(SubprocessLoop):
 class KinesisProducer(object):
     """Produce to Kinesis streams via an AsyncProducer"""
 
-    def __init__(self, stream_name, buffer_time=0.5, max_count=None, max_size=None, boto3_session=None, endpoint_url=None):
+    def __init__(
+        self,
+        stream_name,
+        buffer_time=0.5,
+        max_count=None,
+        max_size=None,
+        boto3_session=None,
+        endpoint_url=None,
+    ):
         self.queue = multiprocessing.Queue()
-        self.async_producer = AsyncProducer(stream_name, buffer_time, self.queue, max_count=max_count,
-                                            max_size=max_size, boto3_session=boto3_session, endpoint_url=endpoint_url)
+        self.async_producer = AsyncProducer(
+            stream_name,
+            buffer_time,
+            self.queue,
+            max_count=max_count,
+            max_size=max_size,
+            boto3_session=boto3_session,
+            endpoint_url=endpoint_url,
+        )
 
     def put(self, data, explicit_hash_key=None, partition_key=None):
         self.queue.put((data, explicit_hash_key, partition_key))

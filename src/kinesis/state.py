@@ -1,9 +1,9 @@
 from __future__ import absolute_import
-from datetime import datetime, timedelta
 
 import logging
 import socket
 import time
+from datetime import datetime, timedelta
 
 import boto3
 from botocore.exceptions import ClientError
@@ -14,53 +14,82 @@ log = logging.getLogger(__name__)
 
 STREAM_RETENTION_PERIOD_IN_HOURS = 24
 
-class DynamoDB(object):
-    def __init__(self, table_name, consumer_name, stream_name, boto3_session=None, endpoint_url=None):
-        self.boto3_session = boto3_session or boto3.Session()
 
-        self.dynamo_resource = self.boto3_session.resource('dynamodb', endpoint_url=endpoint_url)
+class DynamoDB(object):
+    def __init__(
+        self,
+        table_name,
+        consumer_name,
+        stream_name,
+        boto3_session=None,
+        endpoint_url=None,
+        use_enhanced_fan_out=False,
+    ):
+        self.boto3_session = boto3_session or boto3.Session()
+        self.use_enhanced_fan_out = use_enhanced_fan_out
+
+        self.dynamo_resource = self.boto3_session.resource(
+            "dynamodb", endpoint_url=endpoint_url
+        )
         self.dynamo_table = self.dynamo_resource.Table(table_name)
-        self.key = {
-            "consumerGroup": consumer_name,
-            "streamName": stream_name
-        }
+        self.key = {"consumerGroup": consumer_name, "streamName": stream_name}
 
         self.shards = {}
 
     def get_iterator_args(self, shard_id):
-        iterator_args = {'ShardIteratorType': 'LATEST'}
+        """
+        Get iterator arguments for shard initialization.
+
+        For EFO, this will be used to determine the starting position in SubscribeToShard.
+        For standard consumers, this determines the ShardIterator.
+        """
+        if self.use_enhanced_fan_out:
+            # Default for EFO
+            iterator_args = {"Type": "LATEST"}
+        else:
+            # Default for standard consumer
+            iterator_args = {"ShardIteratorType": "LATEST"}
 
         if shard_id not in self.shards:
             return iterator_args
 
-        heartbeat = self.shards[shard_id].get('heartbeat')
-        last_sequence_number = self.shards[shard_id].get('checkpoint')
+        heartbeat = self.shards[shard_id].get("heartbeat")
+        last_sequence_number = self.shards[shard_id].get("checkpoint")
 
         if not heartbeat or not last_sequence_number:
             return iterator_args
 
         try:
-            heartbeat_time = datetime.strptime(heartbeat, '%Y-%m-%dT%H:%M:%S.%fZ')
+            heartbeat_time = datetime.strptime(heartbeat, "%Y-%m-%dT%H:%M:%S.%fZ")
             heartbeat_diff = datetime.utcnow() - heartbeat_time
         except ValueError:
             heartbeat_diff = timedelta.max
 
-        if heartbeat_diff > timedelta(hours=1 * STREAM_RETENTION_PERIOD_IN_HOURS):
-            log.info({
-                'message': 'Heartbeat is stale, defaulting to LATEST',
-                'sequence_number': last_sequence_number,
-                'heartbeat': heartbeat
-            })
+        if heartbeat_diff > timedelta(hours=STREAM_RETENTION_PERIOD_IN_HOURS):
+            log.info(
+                {
+                    "message": "Heartbeat is stale, defaulting to LATEST",
+                    "sequence_number": last_sequence_number,
+                    "heartbeat": heartbeat,
+                }
+            )
         else:
-            iterator_args = {
-                'ShardIteratorType': 'AFTER_SEQUENCE_NUMBER',
-                'StartingSequenceNumber': last_sequence_number
-            }
+            if self.use_enhanced_fan_out:
+                # For EFO, use the appropriate format
+                iterator_args = {
+                    "Type": "AFTER_SEQUENCE_NUMBER",
+                    "SequenceNumber": last_sequence_number,
+                }
+            else:
+                iterator_args = {
+                    "ShardIteratorType": "AFTER_SEQUENCE_NUMBER",
+                    "StartingSequenceNumber": last_sequence_number,
+                }
 
         return iterator_args
 
     def checkpoint(self, shard_id, seq):
-        heartbeat = datetime.utcnow().isoformat() + 'Z'
+        heartbeat = datetime.utcnow().isoformat() + "Z"
 
         try:
             # update the seq attr in our item
@@ -76,16 +105,14 @@ class DynamoDB(object):
                     attribute_not_exists(shards.#shard_id.checkpoint) OR
                     shards.#shard_id.checkpoint < :seq
                 """,
-                ExpressionAttributeNames={
-                    "#shard_id": shard_id
-                },
+                ExpressionAttributeNames={"#shard_id": shard_id},
                 ExpressionAttributeValues={
                     ":heartbeat": heartbeat,
                     ":seq": seq,
-                }
+                },
             )
         except ClientError as exc:
-            if exc.response['Error']['Code'] in RETRY_EXCEPTIONS:
+            if exc.response["Error"]["Code"] in RETRY_EXCEPTIONS:
                 log.warn("Throttled while trying to read lock table in Dynamo: %s", exc)
                 time.sleep(1)
 
@@ -100,12 +127,12 @@ class DynamoDB(object):
         try:
             # Do a consistent read to get the current document for our shard id
             resp = self.dynamo_table.get_item(Key=self.key, ConsistentRead=True)
-            self.shards = resp['Item']['shards']
+            self.shards = resp["Item"]["shards"]
         except KeyError:
             # if there's no Item in the resp then the document didn't exist
             pass
         except ClientError as exc:
-            if exc.response['Error']['Code'] in RETRY_EXCEPTIONS:
+            if exc.response["Error"]["Code"] in RETRY_EXCEPTIONS:
                 log.warn("Throttled while trying to read lock table in Dynamo: %s", exc)
                 time.sleep(1)
                 return self.lock_shard(shard_id)
@@ -113,10 +140,18 @@ class DynamoDB(object):
             # all other client errors just get re-raised
             raise
         else:
-            if shard_id in self.shards and fqdn != self.shards[shard_id]['fqdn'] and now < self.shards[shard_id]['expires']:
+            if (
+                shard_id in self.shards
+                and fqdn != self.shards[shard_id]["fqdn"]
+                and now < self.shards[shard_id]["expires"]
+            ):
                 # we don't hold the lock and it hasn't expired
-                log.debug("Not starting reader for shard %s -- locked by %s until %s",
-                          shard_id, self.shards[shard_id]['fqdn'], self.shards[shard_id]['expires'])
+                log.debug(
+                    "Not starting reader for shard %s -- locked by %s until %s",
+                    shard_id,
+                    self.shards[shard_id]["fqdn"],
+                    self.shards[shard_id]["expires"],
+                )
                 return False
 
         try:
@@ -134,20 +169,15 @@ class DynamoDB(object):
                     shards.#shard_id.fqdn = :current_fqdn AND
                     shards.#shard_id.expires = :current_expires
                 """,
-                ExpressionAttributeNames={
-                    "#shard_id": shard_id
-                },
+                ExpressionAttributeNames={"#shard_id": shard_id},
                 ExpressionAttributeValues={
-                    ':new_fqdn': fqdn,
-                    ':new_expires': expires,
-                    ':current_fqdn': self.shards[shard_id]['fqdn'],
-                    ':current_expires': self.shards[shard_id]['expires'],
-                }
+                    ":new_fqdn": fqdn,
+                    ":new_expires": expires,
+                    ":current_fqdn": self.shards[shard_id]["fqdn"],
+                    ":current_expires": self.shards[shard_id]["expires"],
+                },
             )
-            self.shards[shard_id].update({
-                'fqdn': fqdn,
-                'expires': expires
-            })
+            self.shards[shard_id].update({"fqdn": fqdn, "expires": expires})
         except KeyError:
             # No previous lock - this occurs because we try to reference the shard info in the attr values but we don't
             # have one.  Here our condition prevents a race condition with two readers starting up and both adding a
@@ -155,35 +185,30 @@ class DynamoDB(object):
             self.dynamo_table.update_item(
                 Key=self.key,
                 UpdateExpression="SET shards = if_not_exists(shards, :empty)",
-                ExpressionAttributeValues={
-                    ':empty': {}
-                },
+                ExpressionAttributeValues={":empty": {}},
             )
-            shard = {
-                'fqdn': fqdn,
-                'expires': expires
-            }
+            shard = {"fqdn": fqdn, "expires": expires}
             self.dynamo_table.update_item(
                 Key=self.key,
                 UpdateExpression="SET shards.#shard_id = :shard",
                 ConditionExpression="attribute_not_exists(shards.#shard_id)",
-                ExpressionAttributeValues={
-                    ':shard': shard
-                },
+                ExpressionAttributeValues={":shard": shard},
                 ExpressionAttributeNames={
                     # 'shard' is a reserved word in expressions so we need to use a bound name to work around it
-                    '#shard_id': shard_id,
+                    "#shard_id": shard_id,
                 },
-                ReturnValues='ALL_NEW'
+                ReturnValues="ALL_NEW",
             )
             self.shards[shard_id] = shard
         except ClientError as exc:
-            if exc.response['Error']['Code'] == "ConditionalCheckFailedException":
+            if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
                 # someone else grabbed the lock first
                 return False
 
-            if exc.response['Error']['Code'] in RETRY_EXCEPTIONS:
-                log.warn("Throttled while trying to write lock table in Dynamo: %s", exc)
+            if exc.response["Error"]["Code"] in RETRY_EXCEPTIONS:
+                log.warn(
+                    "Throttled while trying to write lock table in Dynamo: %s", exc
+                )
                 time.sleep(1)
                 return self.should_start_shard_reader(shard_id)
 
